@@ -17,8 +17,7 @@ from typing import Dict, List, Tuple, Optional
 # Import functions from keypoint_detection_functions.py
 from keypoint_detection_functions import (
     get_calibration_matrices,
-    detect_goal_keypoints,
-    undistort_points
+    detect_goal_keypoints
 )
 
 
@@ -75,20 +74,27 @@ def load_frame(frames_dir: Path, filename: str) -> Optional[np.ndarray]:
         The loaded frame or None if failed
     """
     frame_path = frames_dir / filename
-    if not frame_path.exists():
-        return None
+    if frame_path.exists():
+        frame = cv2.imread(str(frame_path))
+        return frame
     
-    frame = cv2.imread(str(frame_path))
-    return frame
+    # If exact match fails, try to find by prefix (up to _jpg.rf.)
+    # Example: matchvid_mp4-0044_jpg.rf.HASH.jpg
+    if '_jpg.rf.' in filename:
+        prefix = filename.split('_jpg.rf.')[0] + '_jpg.rf.'
+        # Search for files that start with this prefix
+        for file in frames_dir.glob(f'{prefix}*.jpg'):
+            frame = cv2.imread(str(file))
+            return frame
+    
+    return None
 
 
 def visualize_keypoints(frame: np.ndarray, detected_goal_top: Tuple[int, int], 
                        detected_tag_top: Tuple[int, int],
-                       undistorted_goal_top: Optional[Tuple[float, float]],
-                       undistorted_tag_top: Optional[Tuple[float, float]],
+                       annotated_goal_top: Optional[Tuple[float, float]],
+                       annotated_tag_top: Optional[Tuple[float, float]],
                        target_size: Tuple[int, int],
-                       camera_matrix: np.ndarray,
-                       dist_coeffs: np.ndarray,
                        title: str) -> None:
     """Visualize detected and annotated keypoints on the frame.
     
@@ -96,26 +102,21 @@ def visualize_keypoints(frame: np.ndarray, detected_goal_top: Tuple[int, int],
         frame: Original frame (1920x1080)
         detected_goal_top: Detected goal top coordinates (scaled resolution) or (None, None)
         detected_tag_top: Detected tag top coordinates (scaled resolution) or (None, None)
-        undistorted_goal_top: Undistorted annotated goal top coordinates (scaled resolution) or None
-        undistorted_tag_top: Undistorted annotated tag top coordinates (scaled resolution) or None
+        annotated_goal_top: Annotated goal top coordinates (scaled resolution) or None
+        annotated_tag_top: Annotated tag top coordinates (scaled resolution) or None
         target_size: Target processing size (320x240)
-        camera_matrix: Camera calibration matrix
-        dist_coeffs: Distortion coefficients
         title: Window title
     """
-    # Undistort the frame first
-    undistorted_frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
-    
     # Scale up coordinates to original resolution for visualization
-    scale_x = 1920 / target_size[0]
-    scale_y = 1080 / target_size[1]
+    scale_x = frame.shape[1] / target_size[0]
+    scale_y = frame.shape[0] / target_size[1]
     
     # Create a copy to draw on
-    vis_frame = undistorted_frame.copy()
+    vis_frame = frame.copy()
     
     # Handle annotated goal_top (if within bounds)
-    if undistorted_goal_top is not None:
-        ann_goal_orig = (int(undistorted_goal_top[0] * scale_x), int(undistorted_goal_top[1] * scale_y))
+    if annotated_goal_top is not None:
+        ann_goal_orig = (int(annotated_goal_top[0] * scale_x), int(annotated_goal_top[1] * scale_y))
         cv2.circle(vis_frame, ann_goal_orig, 8, (0, 0, 255), -1)
         cv2.putText(vis_frame, "A-Goal", (ann_goal_orig[0] + 10, ann_goal_orig[1] + 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
@@ -137,8 +138,8 @@ def visualize_keypoints(frame: np.ndarray, detected_goal_top: Tuple[int, int],
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
     
     # Handle annotated tag_top (if within bounds)
-    if undistorted_tag_top is not None:
-        ann_tag_orig = (int(undistorted_tag_top[0] * scale_x), int(undistorted_tag_top[1] * scale_y))
+    if annotated_tag_top is not None:
+        ann_tag_orig = (int(annotated_tag_top[0] * scale_x), int(annotated_tag_top[1] * scale_y))
         cv2.circle(vis_frame, ann_tag_orig, 8, (0, 0, 255), -1)
         cv2.putText(vis_frame, "A-Tag", (ann_tag_orig[0] + 10, ann_tag_orig[1] - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
@@ -168,15 +169,13 @@ def visualize_keypoints(frame: np.ndarray, detected_goal_top: Tuple[int, int],
 def main():
     # Paths
     project_dir = Path(__file__).parent
-    json_path = project_dir / "test_data" / "goalannotations.json"
-    frames_dir = project_dir / "test_data" / "roboflow_frames"
+    json_path = project_dir / "test_data" / "hardgoalannotations.json"
+    frames_dir = project_dir / "test_data" / "hard_roboflow_frames"
     
     # Load annotations
     print("Loading annotations...")
     data = load_annotations(str(json_path))
-    
-    # Get camera calibration
-    camera_matrix, dist_coeffs = get_calibration_matrices()
+
     target_size = (320, 240)
     
     # Scale factors for converting from original 1920x1080 to target_size
@@ -208,7 +207,17 @@ def main():
         if category_id != 2:
             continue
         
-        total_annotations += 1
+        # Get image info
+        image_id = annotation['image_id']
+        image_info = images_by_id.get(image_id)
+        if image_info is None:
+            print(f"  Annotation {annotation['id']}: Image not found")
+            continue
+        
+        # Only process images with 'Hard' tag
+        user_tags = image_info.get('extra', {}).get('user_tags', [])
+        if 'Hard' not in user_tags:
+            continue
         
         # Get keypoints
         keypoints = extract_keypoints(annotation)
@@ -217,13 +226,6 @@ def main():
             continue
         
         annotated_goal_top, annotated_tag_top = keypoints
-        
-        # Get image info
-        image_id = annotation['image_id']
-        image_info = images_by_id.get(image_id)
-        if image_info is None:
-            print(f"  Annotation {annotation['id']}: Image not found")
-            continue
         
         # Get the filename from the annotations
         filename = image_info.get('file_name', '')
@@ -237,51 +239,37 @@ def main():
             print(f"  Annotation {annotation['id']}: Failed to load frame {filename}")
             continue
         
+        total_annotations += 1
+        
         # Detect keypoints
-        detected_goal_top, detected_tag_top = detect_goal_keypoints(frame, category_id, camera_matrix, dist_coeffs, target_size)
+        detected_goal_top, detected_tag_top = detect_goal_keypoints(frame, category_id, target_size)
         
-        # Check if both detections failed
-        if detected_goal_top == (None, None) and detected_tag_top == (None, None):
-            print(f"  Annotation {annotation['id']}: Both detections failed for {filename}")
-            continue
+        # Scale annotated coordinates from 1920x1080 to target_size
+        scaled_goal_top = (annotated_goal_top[0] * scale_x, annotated_goal_top[1] * scale_y)
+        scaled_tag_top = (annotated_tag_top[0] * scale_x, annotated_tag_top[1] * scale_y)
         
-        # Undistort annotated coordinates (they are in raw image space, need to be in undistorted space)
-        # Original annotated points are in 1920x1080 space
-        undistorted_points = undistort_points(
-            [annotated_goal_top, annotated_tag_top],
-            camera_matrix,
-            dist_coeffs,
-            original_size=(1920, 1080),
-            target_size=target_size
-        )
-        
-        undistorted_goal_top = undistorted_points[0]
-        undistorted_tag_top = undistorted_points[1]
-        
-        # Track outside cases
-        if undistorted_goal_top is None:
+        # Check if scaled annotated points are within bounds
+        if not (0 <= scaled_goal_top[0] < target_size[0] and 0 <= scaled_goal_top[1] < target_size[1]):
+            scaled_goal_top = None
             goal_top_outside += 1
-        if undistorted_tag_top is None:
+        
+        if not (0 <= scaled_tag_top[0] < target_size[0] and 0 <= scaled_tag_top[1] < target_size[1]):
+            scaled_tag_top = None
             tag_top_outside += 1
         
-        # Check if annotated points fell outside the image after undistortion
-        if undistorted_goal_top is None and undistorted_tag_top is None:
-            print(f"  Annotation {annotation['id']}: Both annotated points outside image bounds after undistortion - OUTSIDE")
-            continue
-        
-        # Calculate deviations only for successfully detected points and valid undistorted annotated points
+        # Calculate deviations only for successfully detected points and valid annotated points
         goal_deviation = None
         tag_deviation = None
         combined_deviation = 0
         
-        if detected_goal_top != (None, None) and undistorted_goal_top is not None:
-            goal_deviation = calculate_deviation(detected_goal_top, undistorted_goal_top)
+        if detected_goal_top != (None, None) and scaled_goal_top is not None:
+            goal_deviation = calculate_deviation(detected_goal_top, scaled_goal_top)
             goal_top_deviations.append(goal_deviation)
             goal_top_detections += 1
             combined_deviation += goal_deviation
         
-        if detected_tag_top != (None, None) and undistorted_tag_top is not None:
-            tag_deviation = calculate_deviation(detected_tag_top, undistorted_tag_top)
+        if detected_tag_top != (None, None) and scaled_tag_top is not None:
+            tag_deviation = calculate_deviation(detected_tag_top, scaled_tag_top)
             tag_top_deviations.append(tag_deviation)
             tag_top_detections += 1
             combined_deviation += tag_deviation
@@ -291,24 +279,24 @@ def main():
         # Store frame data for visualization
         color = "Blue" if category_id == 1 else "Red"
         frame_data.append((combined_deviation, frame, detected_goal_top, detected_tag_top,
-                          undistorted_goal_top, undistorted_tag_top, filename, color,
+                          scaled_goal_top, scaled_tag_top, filename, color,
                           goal_deviation, tag_deviation))
         
         print(f"  Annotation {annotation['id']} ({filename}, {color} Goal):")
         if goal_deviation is not None:
             print(f"    Goal-Top deviation: {goal_deviation:.2f} pixels")
-            if undistorted_goal_top is not None:
-                print(f"    Detected Goal-Top: ({int(detected_goal_top[0])}, {int(detected_goal_top[1])}), Annotated (undistorted): ({undistorted_goal_top[0]:.1f}, {undistorted_goal_top[1]:.1f})")
-        elif undistorted_goal_top is None:
+            if scaled_goal_top is not None:
+                print(f"    Detected Goal-Top: ({int(detected_goal_top[0])}, {int(detected_goal_top[1])}), Annotated: ({scaled_goal_top[0]:.1f}, {scaled_goal_top[1]:.1f})")
+        elif scaled_goal_top is None:
             print(f"    Goal-Top: Annotated point OUTSIDE image bounds")
         else:
             print(f"    Goal-Top: Detection FAILED")
         
         if tag_deviation is not None:
             print(f"    Tag-Top deviation: {tag_deviation:.2f} pixels")
-            if undistorted_tag_top is not None:
-                print(f"    Detected Tag-Top: ({int(detected_tag_top[0])}, {int(detected_tag_top[1])}), Annotated (undistorted): ({undistorted_tag_top[0]:.1f}, {undistorted_tag_top[1]:.1f})")
-        elif undistorted_tag_top is None:
+            if scaled_tag_top is not None:
+                print(f"    Detected Tag-Top: ({int(detected_tag_top[0])}, {int(detected_tag_top[1])}), Annotated: ({scaled_tag_top[0]:.1f}, {scaled_tag_top[1]:.1f})")
+        elif scaled_tag_top is None:
             print(f"    Tag-Top: Annotated point OUTSIDE image bounds")
         else:
             print(f"    Tag-Top: Detection FAILED")
@@ -371,8 +359,23 @@ def main():
         print("DISPLAYING FRAMES WITH LARGEST ERRORS")
         print("="*60)
         
-        # Sort by combined deviation (descending)
-        frame_data.sort(key=lambda x: x[0], reverse=True)
+        # Sort by failure type first, then by deviation
+        # Priority: 1) both failed, 2) goal failed, 3) tag failed, 4) both succeeded (by deviation)
+        def sort_key(x):
+            combined_dev, frame, det_goal, det_tag, ann_goal, ann_tag, filename, color, goal_dev, tag_dev = x
+            goal_failed = (goal_dev is None and ann_goal is not None)
+            tag_failed = (tag_dev is None and ann_tag is not None)
+            
+            if goal_failed and tag_failed:
+                return (0, -combined_dev)  # Both failed - highest priority
+            elif goal_failed:
+                return (1, -combined_dev)  # Goal failed only
+            elif tag_failed:
+                return (2, -combined_dev)  # Tag failed only
+            else:
+                return (3, -combined_dev)  # Both succeeded - sort by deviation
+        
+        frame_data.sort(key=sort_key)
         
         num_to_show = len(frame_data)
         print(f"\nShowing all {num_to_show} frames sorted by error (largest first)...")
@@ -400,7 +403,7 @@ def main():
                 title += f" (Combined: {combined_dev:.1f}px)"
             
             visualize_keypoints(frame, det_goal, det_tag, ann_goal, ann_tag,
-                              target_size, camera_matrix, dist_coeffs, title)
+                              target_size, title)
         
         cv2.destroyAllWindows()
         print("\nVisualization complete.")

@@ -32,7 +32,7 @@ def undistort_and_scale(frame: np.ndarray, camera_matrix: np.ndarray,
 
 
 def undistort_points(points: List[Tuple[float, float]], camera_matrix: np.ndarray, 
-                     dist_coeffs: np.ndarray, original_size: Tuple[int, int] = (1920, 1080),
+                     dist_coeffs: np.ndarray, original_size: Tuple[int, int],
                      target_size: Optional[Tuple[int, int]] = None) -> List[Optional[Tuple[float, float]]]:
     """Undistort points from distorted image coordinates to undistorted coordinates.
     
@@ -326,8 +326,7 @@ def calculate_relative_angle(point: Tuple[int, int], width: int, focal_length: f
     return np.degrees(angle)
 
 
-def detect_goal_keypoints(frame: np.ndarray, category_id: int, 
-                         camera_matrix: np.ndarray, dist_coeffs: np.ndarray,
+def detect_goal_keypoints(frame: np.ndarray, category_id: int,
                          target_size: Tuple[int, int]) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
     """Detect goal top and tag top keypoints from a frame.
     
@@ -344,8 +343,8 @@ def detect_goal_keypoints(frame: np.ndarray, category_id: int,
     Returns:
         Tuple of ((goal_top_x, goal_top_y), (tag_top_x, tag_top_y)) or None
     """
-    # Undistort and scale frame
-    processed_frame = undistort_and_scale(frame, camera_matrix, dist_coeffs, target_size)
+    # Scale frame without undistortion
+    processed_frame = cv2.resize(frame, target_size)
     
     # Determine color based on category_id
     color = "blue" if category_id == 1 else "red"
@@ -366,7 +365,7 @@ def detect_goal_keypoints(frame: np.ndarray, category_id: int,
     # Get the midpoint of the top line of the yellow contour
     tag_top = (None, None)
     for contour in filtered_yellow_contours:
-        if cv2.contourArea(contour) >= 50:
+        if cv2.contourArea(contour) > 50:
             line_result = find_top_straight_line(contour)
             if line_result is not None:
                 _, _, midpoint = line_result
