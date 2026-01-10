@@ -16,8 +16,8 @@ from typing import Dict, List, Tuple, Optional
 
 # Import functions from keypoint_detection_functions.py
 from keypoint_detection_functions import (
-    get_calibration_matrices,
-    detect_goal_keypoints
+    detect_goal_keypoints,
+    show_color_contours
 )
 
 
@@ -178,10 +178,6 @@ def main():
 
     target_size = (320, 240)
     
-    # Scale factors for converting from original 1920x1080 to target_size
-    scale_x = target_size[0] / 1920
-    scale_y = target_size[1] / 1080
-    
     # Statistics
     total_annotations = 0
     successful_detections = 0
@@ -244,7 +240,10 @@ def main():
         # Detect keypoints
         detected_goal_top, detected_tag_top = detect_goal_keypoints(frame, category_id, target_size)
         
-        # Scale annotated coordinates from 1920x1080 to target_size
+        # Scale annotated coordinates from actual image resolution to target_size
+        original_height, original_width = frame.shape[:2]
+        scale_x = target_size[0] / original_width
+        scale_y = target_size[1] / original_height
         scaled_goal_top = (annotated_goal_top[0] * scale_x, annotated_goal_top[1] * scale_y)
         scaled_tag_top = (annotated_tag_top[0] * scale_x, annotated_tag_top[1] * scale_y)
         
@@ -276,11 +275,11 @@ def main():
         
         successful_detections += 1
         
-        # Store frame data for visualization
+        # Store frame data for visualization (include category_id for contour display)
         color = "Blue" if category_id == 1 else "Red"
         frame_data.append((combined_deviation, frame, detected_goal_top, detected_tag_top,
                           scaled_goal_top, scaled_tag_top, filename, color,
-                          goal_deviation, tag_deviation))
+                          goal_deviation, tag_deviation, category_id))
         
         print(f"  Annotation {annotation['id']} ({filename}, {color} Goal):")
         if goal_deviation is not None:
@@ -362,7 +361,7 @@ def main():
         # Sort by failure type first, then by deviation
         # Priority: 1) both failed, 2) goal failed, 3) tag failed, 4) both succeeded (by deviation)
         def sort_key(x):
-            combined_dev, frame, det_goal, det_tag, ann_goal, ann_tag, filename, color, goal_dev, tag_dev = x
+            combined_dev, frame, det_goal, det_tag, ann_goal, ann_tag, filename, color, goal_dev, tag_dev, cat_id = x
             goal_failed = (goal_dev is None and ann_goal is not None)
             tag_failed = (tag_dev is None and ann_tag is not None)
             
@@ -382,7 +381,7 @@ def main():
         print("(Press any key to move to next frame)\n")
         
         for i in range(num_to_show):
-            combined_dev, frame, det_goal, det_tag, ann_goal, ann_tag, filename, color, goal_dev, tag_dev = frame_data[i]
+            combined_dev, frame, det_goal, det_tag, ann_goal, ann_tag, filename, color, goal_dev, tag_dev, cat_id = frame_data[i]
             print(f"Frame {i+1}/{num_to_show}: {filename} ({color} Goal)")
             
             if combined_dev > 0:
@@ -404,6 +403,12 @@ def main():
             
             visualize_keypoints(frame, det_goal, det_tag, ann_goal, ann_tag,
                               target_size, title)
+            
+            # Show contour display
+            contour_title = f"Contours {i+1}/{num_to_show}: {filename}"
+            show_color_contours(frame, cat_id, target_size, contour_title)
+            cv2.waitKey(0)
+            cv2.destroyWindow(contour_title)
         
         cv2.destroyAllWindows()
         print("\nVisualization complete.")
