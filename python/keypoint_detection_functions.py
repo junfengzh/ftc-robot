@@ -194,6 +194,29 @@ def find_top_straight_line(contour: np.ndarray, tolerance: float = 5.0) -> Optio
     return left_point, right_point, midpoint
 
 
+def filter_contours_with_top_half_vertices(contours: List[np.ndarray], frame_height: int) -> List[np.ndarray]:
+    """Filter contours to keep only those with at least one vertex in the top half of the frame.
+    
+    Args:
+        contours: List of contours to filter
+        frame_height: Height of the frame
+        
+    Returns:
+        List of contours that have at least one vertex in the top half
+    """
+    filtered_contours = []
+    top_half_threshold = frame_height * 0.5
+    
+    for contour in contours:
+        contour_points = contour.squeeze()
+        if len(contour_points.shape) >= 2:
+            # Check if any point has y coordinate in the top half
+            if np.any(contour_points[:, 1] < top_half_threshold):
+                filtered_contours.append(contour)
+    
+    return filtered_contours
+
+
 def process_contours(contours: List[np.ndarray], min_area: float) -> Tuple[List[np.ndarray], Optional[Tuple[tuple, float]]]:
     """Process contours to find the highest point in the contour with largest area."""
     largest_contour = None
@@ -398,13 +421,18 @@ def show_color_contours(frame: np.ndarray, category_id: int,
     color = "blue" if category_id == 1 else "red"
     color_bgr = (255, 0, 0) if category_id == 1 else (0, 0, 255)
     
-    # Detect colored contours (red or blue) with region mask for goal-top detection
-    color_contours_masked, _ = detect_color_contours(processed_frame, color, apply_region_mask=True)
-    color_highest = process_contours(color_contours_masked, frame_area * 0.002)
+    # Detect colored contours (red or blue) without region mask
+    color_contours_full, _ = detect_color_contours(processed_frame, color, apply_region_mask=False)
     
-    # Draw masked colored contours (used for goal-top detection)
-    if color_contours_masked:
-        cv2.drawContours(vis_frame, color_contours_masked, -1, color_bgr, 1)
+    # Filter to only contours with vertices in the top half
+    color_contours_with_top_vertices = filter_contours_with_top_half_vertices(color_contours_full, target_size[1])
+    
+    # Find highest point in the largest contour with top half vertices
+    color_highest = process_contours(color_contours_with_top_vertices, frame_area * 0.002)
+    
+    # Draw filtered colored contours (used for goal-top detection)
+    if color_contours_with_top_vertices:
+        cv2.drawContours(vis_frame, color_contours_with_top_vertices, -1, color_bgr, 1)
     
     # Draw goal top point
     if color_highest is not None and color_highest != (None, None):
@@ -412,10 +440,7 @@ def show_color_contours(frame: np.ndarray, category_id: int,
         cv2.putText(vis_frame, "Goal-Top", (color_highest[0] + 10, color_highest[1] - 10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
-    # Detect colored contours without region mask for yellow interior detection
-    color_contours_full, _ = detect_color_contours(processed_frame, color, apply_region_mask=False)
-    
-    # Detect yellow contours within full colored contours
+    # Detect yellow contours within full colored contours (already have color_contours_full)
     yellow_contours, _, yellow_mask, interior_mask = detect_yellow_in_contour_interiors(processed_frame, color_contours_full)
     
     # Filter to keep only the topmost yellow contour
@@ -457,6 +482,73 @@ def show_color_contours(frame: np.ndarray, category_id: int,
     cv2.imshow(window_name, combined_view)
 
 
+def show_approx_poly_contours(frame: np.ndarray, category_id: int,
+                             target_size: Tuple[int, int], window_name: str = "ApproxPolyDP Contours") -> None:
+    """Display frame with approximated polygons from red/blue contours.
+    
+    Runs cv2.approxPolyDP on the full red/blue contours (without region masking)
+    and visualizes the approximated polygons.
+    
+    Args:
+        frame: Original frame
+        category_id: 1 for Blue Goal, 2 for Red Goal
+        target_size: Target size for processing
+        window_name: Name of the window to display
+    """
+    # Scale frame
+    processed_frame = cv2.resize(frame, target_size)
+    vis_frame = processed_frame.copy()
+    
+    # Determine color based on category_id
+    color = "blue" if category_id == 1 else "red"
+    color_bgr = (255, 0, 0) if category_id == 1 else (0, 0, 255)
+    
+    # Detect full colored contours without region mask
+    color_contours_full, _ = detect_color_contours(processed_frame, color, apply_region_mask=False)
+    
+    # Draw original contours in color
+    if color_contours_full:
+        cv2.drawContours(vis_frame, color_contours_full, -1, color_bgr, 1)
+    
+    # Apply approxPolyDP to each contour and collect valid polygons
+    valid_polygons = []
+    for contour in color_contours_full:
+        # Calculate epsilon as a percentage of the contour perimeter
+        epsilon = 0.01 * cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        
+        # Apply remove_concave to the approximated polygon
+        approx_cleaned = remove_concave(approx, target_size[1], target_size[0])
+        
+        if approx_cleaned is not None:
+            # Check if polygon has at least one point in the top 40% of the image
+            top_40_percent_threshold = target_size[1] * 0.4
+            has_top_point = any(point[0][1] < top_40_percent_threshold for point in approx_cleaned)
+            
+            if has_top_point:
+                area = cv2.contourArea(approx_cleaned)
+                valid_polygons.append((area, approx_cleaned))
+    
+    # Find and draw only the largest valid polygon
+    if valid_polygons:
+        largest_polygon = max(valid_polygons, key=lambda x: x[0])[1]
+        
+        # Draw cleaned approximated polygon in bright green
+        cv2.drawContours(vis_frame, [largest_polygon], -1, (0, 255, 0), 2)
+        
+        # Draw vertices of the cleaned approximated polygon
+        for point in largest_polygon:
+            pt = tuple(point[0])
+            cv2.circle(vis_frame, pt, 3, (0, 255, 255), -1)
+    
+    # Add label
+    cv2.putText(vis_frame, f"ApproxPolyDP ({color.upper()})", (10, 20),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
+    # Display the frame
+    cv2.imshow(window_name, vis_frame)
+
+
 def detect_goal_keypoints(frame: np.ndarray, category_id: int,
                          target_size: Tuple[int, int]) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
     """Detect goal top and tag top keypoints from a frame.
@@ -482,9 +574,14 @@ def detect_goal_keypoints(frame: np.ndarray, category_id: int,
     # Determine color based on category_id
     color = "blue" if category_id == 1 else "red"
     
-    # Detect colored contours (red or blue) with region mask for goal-top detection
-    color_contours_masked, _ = detect_color_contours(processed_frame, color, apply_region_mask=True)
-    color_highest = process_contours(color_contours_masked, frame_area * 0.002)
+    # Detect colored contours (red or blue) without region mask
+    color_contours_full, _ = detect_color_contours(processed_frame, color, apply_region_mask=False)
+    
+    # Filter to only contours with vertices in the top half
+    color_contours_with_top_vertices = filter_contours_with_top_half_vertices(color_contours_full, target_size[1])
+    
+    # Find highest point in the largest contour with top half vertices
+    color_highest = process_contours(color_contours_with_top_vertices, frame_area * 0.002)
     
     goal_top = color_highest
     
@@ -508,3 +605,142 @@ def detect_goal_keypoints(frame: np.ndarray, category_id: int,
                 break
     
     return goal_top, tag_top
+
+
+def remove_concave(contour: np.ndarray, frame_height: Optional[int] = None, frame_width: Optional[int] = None) -> Optional[np.ndarray]:
+    """Remove concave portions from a contour by splitting along defect vertices.
+    
+    Finds convexity defects, filters out defects with vertices on image edges,
+    filters to those in the top half of the frame, identifies the two vertices 
+    with the largest fixpt_depth from the filtered set, splits the contour along 
+    the line segment between these vertices, and returns the larger of the two 
+    resulting contours.
+    
+    Args:
+        contour: Input contour to process
+        frame_height: Height of the image frame (optional, for filtering)
+        frame_width: Width of the image frame (optional, for filtering)
+        
+    Returns:
+        The larger contour after splitting, or None if processing fails
+    """
+    if contour is None or len(contour) < 4:
+        return contour
+    
+    # Compute convex hull with returnPoints=False to get indices
+    hull = cv2.convexHull(contour, returnPoints=False)
+    
+    if hull is None or len(hull) < 3:
+        return contour
+    
+    # Compute convexity defects
+    defects = cv2.convexityDefects(contour, hull)
+    
+    if defects is None or len(defects) == 0:
+        # No concave regions found
+        return contour
+    
+    # Find the two vertices that are closest together
+    # defects format: [start_index, end_index, farthest_pt_index, fixpt_depth]
+    defects = defects.reshape(-1, 4)
+    
+    # Get the actual points
+    contour_squeezed = contour.squeeze()
+    if len(contour_squeezed.shape) != 2:
+        return contour
+    
+    # Filter out defects whose start or end vertices are on the edge of the image
+    if frame_width is not None and frame_height is not None:
+        edge_threshold = 3  # pixels from edge
+        non_edge_defects = []
+        for defect in defects:
+            start_idx = defect[0]
+            end_idx = defect[1]
+            start_point = contour_squeezed[start_idx]
+            end_point = contour_squeezed[end_idx]
+            
+            # Check if start or end points are on the edge
+            start_on_edge = (start_point[0] <= edge_threshold or 
+                           start_point[0] >= frame_width - edge_threshold or
+                           start_point[1] <= edge_threshold or 
+                           start_point[1] >= frame_height - edge_threshold)
+            end_on_edge = (end_point[0] <= edge_threshold or 
+                         end_point[0] >= frame_width - edge_threshold or
+                         end_point[1] <= edge_threshold or 
+                         end_point[1] >= frame_height - edge_threshold)
+            
+            if not start_on_edge or not end_on_edge:
+                non_edge_defects.append(defect)
+        
+        # Use filtered defects if we have any, otherwise return original contour
+        if len(non_edge_defects) > 0:
+            defects = np.array(non_edge_defects)
+        else:
+            # No non-edge defects found, don't process
+            return contour
+    
+    # Filter defects to those in the top half of the frame if frame_height is provided
+    if frame_height is not None:
+        top_half_threshold = frame_height * 0.4
+        filtered_defects = []
+        for defect in defects:
+            vertex_idx = defect[2]  # farthest_pt_index
+            vertex_y = contour_squeezed[vertex_idx][1]
+            if vertex_y < top_half_threshold:
+                filtered_defects.append(defect)
+        
+        # Use filtered defects if we have at least 2, otherwise use all defects
+        if len(filtered_defects) >= 2:
+            defects = np.array(filtered_defects)
+        else:
+            return contour
+    
+    # Sort by fixpt_depth (4th column) in descending order
+    sorted_indices = np.argsort(defects[:, 3])[::-1]
+    
+    # Get the two defects with largest depth
+    largest_defect = defects[sorted_indices[0]]
+    second_largest_defect = defects[sorted_indices[1]]
+    
+    # Extract the farthest point indices (these are the vertices of the defect)
+    start_idx = largest_defect[2]
+    end_idx = second_largest_defect[2]
+    
+    start_point = contour_squeezed[start_idx]
+    end_point = contour_squeezed[end_idx]
+    
+    # Make sure start_idx < end_idx for proper splitting
+    if start_idx > end_idx:
+        start_idx, end_idx = end_idx, start_idx
+        start_point, end_point = end_point, start_point
+    
+    # Split the contour into two segments
+    # Segment 1: from start_idx to end_idx (going forward)
+    segment1_points = contour_squeezed[start_idx:end_idx + 1]
+    
+    # Segment 2: from end_idx to start_idx (going around)
+    segment2_points = np.vstack([
+        contour_squeezed[end_idx:],
+        contour_squeezed[:start_idx + 1]
+    ])
+    
+    # Close each segment by adding the line between start and end points
+    # For segment 1, add the closing line from end to start
+    segment1_contour = np.vstack([segment1_points, [start_point]])
+    
+    # For segment 2, it's already closed by wrapping around
+    segment2_contour = segment2_points
+    
+    # Calculate areas of both segments
+    # Reshape to proper contour format for cv2.contourArea
+    segment1_contour_reshaped = segment1_contour.reshape(-1, 1, 2).astype(np.int32)
+    segment2_contour_reshaped = segment2_contour.reshape(-1, 1, 2).astype(np.int32)
+    
+    area1 = cv2.contourArea(segment1_contour_reshaped)
+    area2 = cv2.contourArea(segment2_contour_reshaped)
+    
+    # Return the larger contour
+    if area1 > area2:
+        return segment1_contour_reshaped
+    else:
+        return segment2_contour_reshaped

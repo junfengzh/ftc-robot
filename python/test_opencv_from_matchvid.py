@@ -17,7 +17,8 @@ from typing import Dict, List, Tuple, Optional
 # Import functions from keypoint_detection_functions.py
 from keypoint_detection_functions import (
     detect_goal_keypoints,
-    show_color_contours
+    show_color_contours,
+    show_approx_poly_contours
 )
 
 
@@ -409,6 +410,12 @@ def main():
             show_color_contours(frame, cat_id, target_size, contour_title)
             cv2.waitKey(0)
             cv2.destroyWindow(contour_title)
+            
+            # Show approxPolyDP display
+            approx_title = f"ApproxPolyDP {i+1}/{num_to_show}: {filename}"
+            show_approx_poly_contours(frame, cat_id, target_size, approx_title)
+            cv2.waitKey(0)
+            cv2.destroyWindow(approx_title)
         
         cv2.destroyAllWindows()
         print("\nVisualization complete.")
