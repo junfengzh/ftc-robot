@@ -50,9 +50,9 @@ public class VisionLocalizerImageTest {
         
         List<TestCase> tests = new ArrayList<>();
         // Current Best Guess: Robot at X=64, Y=0 facing wall (180 deg)
-        tests.add(new TestCase("Arducam 1", dataDir + "arducam1.jpg", -64.0, -9.0, 0.0));
+        tests.add(new TestCase("Arducam 1", dataDir + "arducam1.jpg", 64.0, 0.0, 180.0));
         // Arducam 1_1758: Robot at -45, 45 facing wall (310 deg)
-        tests.add(new TestCase("Arducam 1_1758", dataDir + "arducam1_1758.jpg", 50.0, 50.0, 120.0));
+        tests.add(new TestCase("Arducam 1_1758", dataDir + "arducam1_1758.jpg", -45.0, 45.0, 310.0));
 
         // Setup Localizer
         Map<Integer, VisionLocalizer.VisionPose3D> fieldMap = VisionLocalizer.DECODE_FIELD_MAP;

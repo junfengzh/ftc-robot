@@ -72,7 +72,7 @@ public class VisionLocalizer {
 
             VisionPose3D tagFieldPose = fieldMap.get(detection.id);
             double tagSize = TAG_SIZE_INCHES;
-
+            
             // Standard OpenCV Y-Down convention
             MatOfPoint3f objectPoints = new MatOfPoint3f(
                 new Point3(-tagSize/2, -tagSize/2, 0), // TL
@@ -84,8 +84,9 @@ public class VisionLocalizer {
             MatOfPoint2f imagePoints = new MatOfPoint2f(detection.corners);
             Mat rvec = new Mat();
             Mat tvec = new Mat();
-
+            
             if (Calib3d.solvePnP(objectPoints, imagePoints, cameraMatrix, distCoeffs, rvec, tvec)) {
+                // PURE GEOMETRIC TRANSFORM
                 double tx = tvec.get(0, 0)[0];
                 double ty = tvec.get(1, 0)[0];
                 double tz = tvec.get(2, 0)[0];
@@ -101,16 +102,9 @@ public class VisionLocalizer {
                 double tagRelRobotUp = tagRelCamUp + cameraTransform.z;
 
                 // 3. Rotate Tag-relative-to-Robot into Field-Frame vector
-                Mat rotMat = new Mat();
-                Calib3d.Rodrigues(rvec, rotMat);
-                // Yaw around Y-axis: atan2(R[2][0], R[2][2])
-                double rvecYaw = Math.atan2(rotMat.get(2, 0)[0], rotMat.get(2, 2)[0]) + Math.toRadians(180.0);
-                rotMat.release();
-                double computedYawRadians = tagFieldPose.yaw + rvecYaw;
-
-                double cosYaw = Math.cos(computedYawRadians);
-                double sinYaw = Math.sin(computedYawRadians);
-
+                double cosYaw = Math.cos(imuYawRadians);
+                double sinYaw = Math.sin(imuYawRadians);
+                
                 double tagRelFieldX = tagRelRobotForward * cosYaw - tagRelRobotLeft * sinYaw;
                 double tagRelFieldY = tagRelRobotForward * sinYaw + tagRelRobotLeft * cosYaw;
                 double tagRelFieldZ = tagRelRobotUp;
@@ -120,18 +114,18 @@ public class VisionLocalizer {
                 double robotY = tagFieldPose.y - tagRelFieldY;
                 double robotZ = tagFieldPose.z - tagRelFieldZ;
 
-                robotPoses.add(new VisionPose3D(robotX, robotY, robotZ, 0, 0, computedYawRadians));
+                robotPoses.add(new VisionPose3D(robotX, robotY, robotZ, 0, 0, imuYawRadians));
             }
             rvec.release(); tvec.release(); objectPoints.release(); imagePoints.release();
         }
 
         if (robotPoses.isEmpty()) return null;
 
-        double avgX = 0, avgY = 0, avgZ = 0, avgYaw = 0;
+        double avgX = 0, avgY = 0, avgZ = 0;
         for (VisionPose3D p : robotPoses) {
-            avgX += p.x; avgY += p.y; avgZ += p.z; avgYaw += p.yaw;
+            avgX += p.x; avgY += p.y; avgZ += p.z;
         }
-        return new VisionPose3D(avgX / robotPoses.size(), avgY / robotPoses.size(), avgZ / robotPoses.size(), 0, 0, avgYaw / robotPoses.size());
+        return new VisionPose3D(avgX / robotPoses.size(), avgY / robotPoses.size(), avgZ / robotPoses.size(), 0, 0, imuYawRadians);
     }
 
     private double[][] getRotationMatrix(double roll, double pitch, double yaw) {
